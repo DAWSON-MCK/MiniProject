@@ -4,18 +4,19 @@
  */
 #include "Encoder.h"
 #include <Wire.h>
-#include "DualMC33926MotorShield.h"
-// motor object 
-DualMC33926MotorShield md;
+
 
 // pin definitions for the encoder and the LCD
 #define pwmMod        9 // used to modify the PWM
 #define ENC1          2
 #define ENC2          3
 #define SLAVE_ADDRESS 0x04// dawson info  
-#define TOLERANCE     20 // give some tolerance to the rotational value 
-#define CPR           3200 // counts per revolution 
-#define PERIOD        10
+#define TOLERANCE     PI/8 // give some tolerance to the rotational value 
+#define ONE           0
+#define TWO           200
+#define THREE         400
+#define FOUR          600
+#define CPR           800 // counts per revolution 
 
 // variables used for the controller
 double timeChange; // used to keep track of the time elapsed 
@@ -30,44 +31,45 @@ Encoder encoderValues(ENC1, ENC2); // used to keep track of the position of the 
 float oldPos; // used for delta U?
 float newPos = 0;
 
-float  currentPosition = 0; // keeps track of our encoder values 
+int  currentPosition = 0; // keeps track of our encoder values 
 
-int loopCounts; 
 int desiredPos = 3; // keeps track of our quadrants 
 double rad = 0; // calculates the position on the quadrant 
 
 
 // here are the controller variables 
-double Kp = 0.62655794027008;
+double Kp = 0.3;
 double Ki = 0.139513658834803;
 
 // from the motor shield example code
 // reads from the pin to see if there is an error 
 
-void stopIfFault()
-{
-  if (md.getFault())
-  {
-    Serial.println("fault");
-    while(1);
-  }
-}
-
+// initialize our variables and motor object
 void setup() {
   pinMode(ENC1, INPUT);
   pinMode(ENC2, INPUT);
-  pinMode(12, OUTPUT); // this is the status flag indicator 
+  
+  pinMode(4, OUTPUT); // here we set the tri-state
+  digitalWrite(4, HIGH);
+  
+  pinMode(7, OUTPUT); // sets the motor 1 direction to high
+  digitalWrite(7, HIGH);
+  
+  pinMode(pwmMod, OUTPUT); // motor 1 pwm 
+  
+  pinMode(8, OUTPUT); // motor 2 direction 
+  pinMode(10, OUTPUT); // motor 2 pwm
+  
+  pinMode(12, INPUT); // status flag indicator 
+
   Serial.begin(9600);
 
-  // initialize the motor object 
-  md.init();
-  
-  // initialize ISR
+  // print statement to the serial monitor 
   Serial.println("Mini Project");
   Serial.println("Ready!");
 
 
-  /*
+
   // initialize I2C as the subordinate 
   Wire.begin(SLAVE_ADDRESS);
 
@@ -76,82 +78,75 @@ void setup() {
   Wire.onReceive(receiveData);
   Serial.println("Mini Project");
   Serial.println("Ready!");
-*/
 }
 
-void loop() { // we ,ay want to change the conditional count values in order to give some tolerance 
-  currentPosition = encoderValues.read();
-  rad = (currentPosition/CPR)*2*3.1415;
-  Serial.println(rad);
-  if(rad>=6.2831){
-    rad = rad - 6.2831;
-    currentPosition = currentPosition - CPR;
+// void loop will read the desired position from the camera 
+// and then use speed control in order to designate direction/speed of the motor 
+void loop() {
+  double lastPosition;
+  currentPosition = encoderValues.read()/4;
+
+  if (currentPosition != lastPosition){
+    Serial.println(currentPosition);
+    lastPosition = currentPosition;
   }
-  else if (rad <= 6.2831){
-    rad = rad + 6.2831;
-    currentPosition = currentPosition + CPR;
-  }
+  
+  //rad = (currentPosition/CPR)*2*3.1415;
   switch(desiredPos) { // we will use these switch cases to rotate towards the goal in the shortest route
 
     case 1: // here we are trying to rotate towards 0/2pi
         
-    if (rad != 0){   
-      speedControl(0);   
+    if (currentPosition != ONE){   // we have added buffers of PI/8 in orde to add some wiggle room 
+      speedControl(ONE);   
     }
 
     break;
 
     case 2: // here we are rotating towards pi/2 
 
-
-    if (rad != PI/2){
-      speedControl(PI/2);
+    if (currentPosition != 200){
+      speedControl(TWO);
     }
     break;
 
     case 3: // here we will rotate towards pi 
 
-    if (rad != PI) {
-      speedControl(PI);
+    if (currentPosition != 400) {
+      speedControl(THREE);
     }
     break;
 
     case 4: // here we will rotate towards 3pi/2
 
-    if (rad != (3*PI)/2){
-      speedControl((3*PI)/2);
+    if (currentPosition != 600){
+      speedControl(FOUR);
     }
     break;
   }
-}
+} 
+
+// HERE WE HAVE OUR CONTROLLER (SEEMS TO JUST BE A P CONTROLLER) 
 void speedControl(double target){
-  unsigned long now = millis();
-  unsigned long delay1 = now;
-  error = (target - rad);
-  voltage = Kp*error;
-  pwmOut = (voltage / 7.8) * 127;
-  if ((abs(pwmOut) > 255) && (pwmOut < 0)){
-    pwmOut = -255;
-  }
-  else if ((abs(pwmOut) > 255) && (pwmOut > 0)) {
-    pwmOut = 255;
+  error = (target - currentPosition); // READ IN THE ERROR VALUE BY SUBTRACTING OUR CURRENT POSITION FROM OUR TARGET 
+  voltage = Kp*error; // WE ACQUIRE OUR VOLTAGE VALUE BY MULTIPLYING OUR Kp CONSTANT 
+  pwmOut = (voltage / 7.8) * 255; // WE SCALE DOWN OUR VOLTAGE VALUE TO THE PWM 255 VALUE 
+  
+  if (pwmOut < 0){ // IF WE ARE AT A VALUE HIGHER THAN -255 WE WILL ROTATE IN THE NEGATIVE DIRECTION AT MAX SPEED 
+    digitalWrite(7, false);
   }
   else {
-    pwmOut = pwmOut;
+    digitalWrite(7,true);
   }
-  md.setM1Speed(pwmOut);
+  pwmOut = abs(pwmOut);
 
-  unsigned long delay2 = now;
-  timeChange = delay2-delay1;
-
-  if (timeChange < PERIOD*loopCounts){
-    delay(PERIOD - timeChange);
+  if(pwmOut > 255) {
+    pwmOut = 255;
   }
-  loopCounts++;
+  analogWrite(pwmMod, pwmOut);
+
 }
 
-/*
- * DAWSON STUFF
+
 void receiveData(int byteCount){
   while(Wire.available()) {
     desiredPos = Wire.read();
@@ -163,4 +158,3 @@ void receiveData(int byteCount){
 void sendData(){
   Wire.write(desiredPos);
 }
-*/
